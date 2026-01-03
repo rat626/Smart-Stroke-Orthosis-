@@ -1,0 +1,110 @@
+CH_NAMES = ['FC3', 'C3', 'CP3', 'FC4', 'C4', 'CP4'] 
+  #these are the contralateral(FC4, C4, CP4 - right brain), and ipsilateral(FC3, C3, CP3) electrodes used for later psd calculations
+SFREQ = 250
+  #standard sampling frequency of 250 hz
+
+def load_mat_data(file_path, file_type='mat'):
+    mat_data = sio.loadmat(file_path)
+    raw_data = mat_data['RawEEGData']
+    labels = mat_data['Labels']
+    if raw_data.ndim != 3:
+        raw_data = np.transpose(raw_data, (2, 0, 1))
+            #transposing is used to ensure data is in right format for an epoch/segment of time - trials, channels, samples
+    n_trials, n_channels_in_file, n_samples = raw_data.shape
+    if n_channels_in_file > len(CH_NAMES):
+        raw_data = raw_data[:, :len(CH_NAMES), :]
+            #this sets the length of raw_data to the length of the channel names - so that data is only collected for these corresponding channel;s
+    return raw_data, labels
+
+
+  #files from the dataset were in .mat format - this is to create a raw_data file from .csv(more common format) - automatically makes a dataframe 
+def load_csv_to_mne(csv_file, sfreq=250):
+    df = pd.read_csv(csv_file)
+    data = df[CH_NAMES].values.T
+    data = data * 1e-6
+    info = mne.create_info(ch_names=CH_NAMES, sfreq=SFREQ, ch_types='eeg')
+    raw_data = mne.io.RawArray(data, info)
+    return raw_data
+
+
+  def load_and_clean_data(file_path, file_type='mat'):
+    if file_type == 'mat':
+        raw_data, labels = load_mat_data(file_path)
+        info = mne.create_info(ch_names=CH_NAMES, sfreq=SFREQ, ch_types='eeg')
+        events_matrix = np.zeros((len(labels), 3), dtype=int)
+        events_matrix[:, 0] = np.arange(len(labels)) * 1000
+          #this is used to label the first dimension of the 3D events_matrix - since each evaluated trial is 4 seconds long[see trial structure], and the sampling rate is 250 hz, there are 1000 samples per trial - this code assigns each sample to an epoch/trial number and gives it the corresponding label([1] - right hand, [2] - left hand)
+        events_matrix[:, 2] = labels.flatten()
+          #this flattens the 3rd dimension(# of samples) - which makes events_matrix a row where there are values of [1][2][1][2] that go until # of samples has been reached
+        epochs = mne.EpochsArray(data=raw_data*1e-6, info=info, events=events_matrix, tmin=-3.0)
+    else:
+        raw_mne = load_csv_to_mne(file_path)
+        events = mne.make_fixed_length_events(raw_mne, duration=8.0)
+        labels = np.ones(len(events))
+        epochs = mne.Epochs(raw_mne, events, tmin=-3.0, tmax=4.5, baseline=(-3.0, -1.5), preload=True)
+    return epochs, labels
+
+def calculate_psd(epochs_segmented):
+    contra_motorstrip = epochs_segmented.copy().pick(['FC4', 'C4', 'CP4'])
+    ipsi_motorstrip = epochs_segmented.copy().pick(['FC3', 'C3', 'CP3'])
+    c_base = contra_motorstrip.compute_psd(tmin=-3, tmax=-1.5, fmin=8, fmax=30).get_data().mean(axis=(1, 2))
+      #c_base and i_base refer to the baseline time period - which I set to -3 seconds to -1.5 seconds in the trial structure of the CBCI dataset(period in which user was prompted to get ready) - and frequency range is from 8 to 30 hz to account for alpha(specifically mu rhythm) and beta frequencies, as both are important for sensorimotor intent
+    c_task = contra_motorstrip.compute_psd(tmin=0.5, tmax=4.5, fmin=8, fmax=30).get_data().mean(axis=(1, 2))
+    i_base = ipsi_motorstrip.compute_psd(tmin=-3, tmax=-1.5, fmin=8, fmax=30).get_data().mean(axis=(1, 2))
+    i_task = ipsi_motorstrip.compute_psd(tmin=0.5, tmax=4.5, fmin=8, fmax=30).get_data().mean(axis=(1, 2))
+    erddrop_contra = ((c_task - c_base) / c_base) * 100
+    erddrop_ipsi = ((i_task - i_base) / i_base) * 100
+      #to calculate event - related desynchronization as a percentage drop - this code is used - essentially percent change formula
+    return erddrop_contra, erddrop_ipsi
+
+def success_rate(erddrop_ipsi, erddrop_contra, labels, ideal_li_slider):
+    li_value = (erddrop_ipsi - erddrop_contra) / (np.abs(erddrop_ipsi) + np.abs(erddrop_contra))
+    predictions = []
+
+    # these are the default values set for intent and confidence that are changed via for loop conditions being met
+    intent = False
+    confidence = 0.0
+
+    for contra, ipsi, li in zip(erddrop_contra, erddrop_ipsi, li_value):
+        weighted_score = 0.7*contra + 0.3*ipsi
+        if (weighted_score) <= -20 or (li < -0.2 and weighted_score < -5):
+            predictions.append(2)
+            intent = True
+        else:
+            predictions.append(1)
+            intent = False
+
+
+  #THIS IS THE DOUBLE GATE LOGIC - weighted_score is the percentage of the erd drop that comes from the contralateral/ipsilateral side - we want the system to reward contralateral pathways
+      #CONDITION 1(weighted_score <= -20) - if a drop of more than 20%(significant erd drop for motor intent) involves 70% contralateral hemisphere and 30% ipsilateral, then the orthosis moves
+      #CONDITION 2  (li < -0.2 and weighted_score < -5) - li refers to the lateralization index(li_value is the full collection of li_values for every trial) - a negative li indicaes that the contralateral erd drop is greater than the ipsilateral - and being less than -0.2 indicates clear contralateral motor intent - I also added a condition, weighted_score < -5, to ensure that there was still a nonzero ERD drop, but accounting for the fact that not all patients can produce an ERD drop greater than 20% 
+
+        # Condition 1 Confidence
+        passing_score = -20
+        ideal_score = -60
+        score_dist_ratio = abs((weighted_score - passing_score)/(ideal_score - passing_score))
+        score_dist_ratio = min(max(score_dist_ratio, 0), 1)
+        confidence_scores = 50 + (score_dist_ratio)*50
+
+        # Condition 2 Confidence
+        passing_li = -0.2
+        ideal_li = ideal_li_slider
+        lidist_ratio = abs(li - passing_li) / abs(ideal_li - passing_li)
+        lidist_ratio = min(max(lidist_ratio, 0), 1)  #for this min/max - it takes max bc if ratio is less than 0, will assume 0, then takes min of whole statement so that you get exact value(assuming it's less than 1)
+
+        passing_weight = -5
+        ideal_weight = -20
+        weight_ratio = abs((weighted_score - passing_weight)/(ideal_weight - passing_weight))
+        weight_ratio = min(max(weight_ratio, 0), 1)
+
+        combined_ratio = min(lidist_ratio, weight_ratio)
+        confidence_liandweight = 50 + (combined_ratio)*50 #this is *50 bc we want confidence percentage from 50 to 100
+
+        confidence = (confidence_scores + confidence_liandweight)/2
+
+
+      #This code is used to produce a confidence score based on how much the caculated li value and weighted score diverge from the ideal value - note - for the li value, I incorporated an li slider into the streamlit app to allow a clinician to set what the ideal li value should be for a patient
+
+    matches = np.sum(np.array(predictions) == labels.flatten()) #condensed version of before - number of times the prediction label([1]/[2]) = actual label
+    accuracy_percentage = (matches / len(labels)) * 100
+    return accuracy_percentage, intent, confidence
