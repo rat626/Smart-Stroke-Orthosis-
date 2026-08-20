@@ -64,7 +64,7 @@ flowchart TD
         direction TB
         G1d["Calibration:<br/>Paretic Break Distribution"]:::whiteBox
         Gate1{"Gate 1 Test:<br/>Paretic Trials"}:::orange
-        Cond1{"Imagery Power <=\nmean_break - 1.5 SD?"}:::lightGreen
+        Cond1["Imagery Power <=\nmean_break - 1.5 SD?"]:::lightGreen
         
         G1d -.-> Gate1 --> Cond1
     end
