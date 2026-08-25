@@ -97,7 +97,7 @@ flowchart TD
 I also developed a Streamlit dashboard that highlights the chosen frequency band, trials used for calibration/testing, and the results of each trial, showing whether the orthosis is open/locked, and by clicking on each trial, the distribution and whether the current trial satisfies Gate 1 and 2(both gates need to be passed for the orthosis to open). I utilized a deterministic gate logic to open/close the orthosis, as I wanted to ground trial-based results in true indication of contralateral intent, first seeing if the contralateral event-related desynchronization was even significant compared to a break period, and whether there was lower power in the contralateral side compared to the ipsilateral side in the present trial, compared to the drop that would be present in healthy imagery(eg. if paralysis was on the right, lesion is in the left brain, and healthy imagery would be imagining movement of the left hand with the right brain). 
 
 
-The data used to test the pipeline came from Liu et al. 2024(linked below), and I have attached addisional research publications I used to inform the usage of lateralization index and drawing from motor-related electrodes on the contralateral and ipsilateral sides to determine cases of "cheating" the system with ipsilateral overcompensation. 
+The data used to test the pipeline came from Liu et al. 2024(linked below), and I have attached additional research publications I used to inform the usage of lateralization index and drawing from motor-related electrodes on the contralateral and ipsilateral sides to determine cases of "cheating" the system with ipsilateral overcompensation. 
 
 These are some additional research publications I used to develop my veto/dual gate logic for triggering movement: 
 
